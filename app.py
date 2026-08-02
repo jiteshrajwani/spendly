@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import datetime
 
 from flask import Flask, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -79,7 +80,7 @@ def login():
         return render_template("login.html", error="Invalid email or password.")
 
     session["user_id"] = user["id"]
-    return redirect(url_for("landing"))
+    return redirect(url_for("profile"))
 
 
 @app.route("/terms")
@@ -104,7 +105,69 @@ def logout():
 
 @app.route("/profile")
 def profile():
-    return "Profile page — coming in Step 4"
+    if not session.get("user_id"):
+        return redirect(url_for("login"))
+
+    conn = get_db()
+    db_user = conn.execute(
+        "SELECT name, email, created_at FROM users WHERE id = ?",
+        (session["user_id"],),
+    ).fetchone()
+    expenses = conn.execute(
+        "SELECT date, description, category, amount FROM expenses "
+        "WHERE user_id = ? ORDER BY date DESC",
+        (session["user_id"],),
+    ).fetchall()
+    conn.close()
+
+    member_since = datetime.strptime(db_user["created_at"], "%Y-%m-%d %H:%M:%S").strftime("%B %Y")
+    initials = "".join(part[0].upper() for part in db_user["name"].split()[:2])
+
+    user = {
+        "name": db_user["name"],
+        "email": db_user["email"],
+        "member_since": member_since,
+        "initials": initials,
+    }
+
+    total_spent = sum(e["amount"] for e in expenses)
+
+    category_totals = {}
+    for e in expenses:
+        category_totals[e["category"]] = category_totals.get(e["category"], 0) + e["amount"]
+    categories_sorted = sorted(category_totals.items(), key=lambda item: item[1], reverse=True)
+    max_category_total = categories_sorted[0][1] if categories_sorted else 0
+
+    stats = {
+        "total_spent": total_spent,
+        "transaction_count": len(expenses),
+        "top_category": categories_sorted[0][0] if categories_sorted else "N/A",
+    }
+    transactions = [
+        {
+            "date": e["date"],
+            "description": e["description"],
+            "category": e["category"],
+            "amount": e["amount"],
+        }
+        for e in expenses[:5]
+    ]
+    categories = [
+        {
+            "name": name,
+            "amount": amount,
+            "percent": round(amount / max_category_total * 100) if max_category_total else 0,
+        }
+        for name, amount in categories_sorted
+    ]
+
+    return render_template(
+        "profile.html",
+        user=user,
+        stats=stats,
+        transactions=transactions,
+        categories=categories,
+    )
 
 
 @app.route("/expenses/add")
